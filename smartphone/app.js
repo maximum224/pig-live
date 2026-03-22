@@ -306,16 +306,29 @@ async function startMonitoring() {
 
 async function startBLEScan() {
     try {
-        const scan = await navigator.bluetooth.requestLEScan({
-            acceptAllAdvertisements: true,
-        });
+        log('（許可画面が出ない場合はURLバー左の🔒マークから権限を確認してください）', 'info');
+        
+        // 10秒でタイムアウトさせる（Chromeが黙ってハングするバグへの対策）
+        const timeoutPromise = new Promise((_, reject) => 
+            setTimeout(() => reject(new Error('許可ダイアログが開かずにタイムアウトしました')), 10000)
+        );
+        
+        const scanOptions = { acceptAllAdvertisements: true };
+        const scanPromise = navigator.bluetooth.requestLEScan(scanOptions);
+        
+        const scan = await Promise.race([scanPromise, timeoutPromise]);
 
         navigator.bluetooth.addEventListener('advertisementreceived', handleAdvertisement);
 
         log('BLE広告スキャンを開始しました（リアルタイムモード）', 'success');
     } catch (err) {
-        log(`requestLEScan エラー: ${err.message} - 定期スキャンに切替`, 'warning');
-        await startPeriodicScan();
+        log(`スキャン開始エラー: ${err.message}`, 'error');
+        if (err.message.includes('タイムアウト')) {
+            log('💡 ヒント: Android Chromeの設定で「Experimental Web Platform features」がEnabledになっているか、スマホ本体の位置情報がONになっているか再確認してください。', 'warning');
+        } else {
+            // その他のエラーの場合は定期スキャン（requestDevice）を試す
+            await startPeriodicScan();
+        }
     }
 }
 
