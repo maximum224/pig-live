@@ -1,0 +1,16 @@
+{
+  "ibeacon_uuid": "FDA50693-A4E2-4FB1-AFCF-C0BDB8E57A95",
+  "ibeacon_major": 1,
+  "ibeacon_minor": 1,
+  "rssi_threshold": -60,
+  "detection_count_threshold": 3,
+  "scan_interval": 2.0,
+  "obs": {
+    "host": "localhost",
+    "port": 4455,
+    "password": "",
+    "scene_name": ""
+  },
+  "auto_stop": false,
+  "comment": "このファイルは設定の参考用です。実際の設定は receiver/ble_monitor.py を編集してください。iBeaconのUUID/Major/Minorは400-MMBLEBC9P3の専用アプリで設定した値に合わせてください。"
+}

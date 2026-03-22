@@ -1,0 +1,11 @@
+{
+    "name": "豚ライブ配信システム",
+    "short_name": "豚ライブ",
+    "description": "BLEビーコンで豚の接近を検知し、YouTube Liveで自動配信",
+    "start_url": "./index.html",
+    "display": "standalone",
+    "background_color": "#0f0f1a",
+    "theme_color": "#1a1a2e",
+    "orientation": "portrait",
+    "icons": []
+}

@@ -1,0 +1,244 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>🐷 豚ライブ配信システム</title>
+    <meta name="description" content="BLEビーコンで豚の接近を検知し、YouTube Liveで自動配信するスマートフォン用Webアプリ">
+    <link rel="manifest" href="manifest.json">
+    <meta name="theme-color" content="#1a1a2e">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div id="app">
+        <!-- ヘッダー -->
+        <header id="header">
+            <div class="header-content">
+                <div class="header-title">
+                    <span class="header-emoji">🐷</span>
+                    <h1>豚ライブ配信</h1>
+                </div>
+                <div class="header-status" id="headerStatus">
+                    <span class="status-dot offline"></span>
+                    <span class="status-text">停止中</span>
+                </div>
+            </div>
+        </header>
+
+        <!-- プラットフォーム切替 -->
+        <div class="platform-switcher" id="platformSwitcher">
+            <button class="platform-btn active" id="btnAndroid" data-platform="android">
+                <span class="platform-icon">🤖</span> Android
+            </button>
+            <button class="platform-btn" id="btnIos" data-platform="ios">
+                <span class="platform-icon">🍎</span> iPhone
+            </button>
+        </div>
+
+        <!-- メインコンテンツ -->
+        <main id="main">
+            <!-- ステータスカード -->
+            <section class="card status-card" id="statusCard">
+                <div class="status-hero">
+                    <div class="status-icon" id="statusIcon">
+                        <span>📡</span>
+                    </div>
+                    <h2 id="statusTitle">監視停止中</h2>
+                    <p id="statusMessage">「監視開始」ボタンを押してスキャンを開始してください</p>
+                </div>
+                <!-- Android: BLEスキャンボタン -->
+                <button class="btn btn-primary btn-lg android-only" id="btnToggleMonitor">
+                    <span class="btn-icon">▶</span>
+                    監視開始
+                </button>
+            </section>
+
+            <!-- iOS専用: BLE対応案内 + Pushcutフォールバック -->
+            <section class="card ios-only" id="pushcutCard" style="display:none;">
+                <div class="card-header">
+                    <h3>📱 iPhoneでBLE検知</h3>
+                    <span class="pushcut-badge" id="pushcutBadge">未設定</span>
+                </div>
+                <div class="pushcut-body">
+                    <div class="pushcut-status" id="pushcutStatus">
+                        <div class="pushcut-step" style="background:rgba(0,200,83,0.08); border:1px solid rgba(0,200,83,0.2);">
+                            <span class="step-num" style="background:var(--success);">★</span>
+                            <span><b>おすすめ:</b> Bluefyブラウザで開く</span>
+                            <a href="https://apps.apple.com/app/bluefy-web-ble-browser/id1492822055" target="_blank" class="btn-text">App Store →</a>
+                        </div>
+                    </div>
+                    <p class="hint">💡 <b>Bluefy</b> はiOSでWeb Bluetooth APIに対応したブラウザです。インストール後、Bluefyでこのページを開くと「監視開始」ボタンが表示され、iPhoneだけでBLE検知＋YouTube配信ができます。</p>
+
+                    <hr style="border:none; border-top:1px solid var(--border); margin:12px 0;">
+                    <p class="hint" style="color:var(--text-muted);">Safariの場合（PC経由方式）:</p>
+                    <div class="pushcut-status">
+                        <div class="pushcut-step">
+                            <span class="step-num">1</span>
+                            <span>Pushcutアプリをインストール</span>
+                            <a href="https://apps.apple.com/app/pushcut/id1450936447" target="_blank" class="btn-text">App Store →</a>
+                        </div>
+                        <div class="pushcut-step">
+                            <span class="step-num">2</span>
+                            <span>通知「豚が接近」を作成</span>
+                        </div>
+                        <div class="pushcut-step">
+                            <span class="step-num">3</span>
+                            <span>Webhook URLをble_monitor.pyに設定</span>
+                        </div>
+                    </div>
+                    <div class="form-field" style="margin-top:12px;">
+                        <label for="inputWebhookTest">Webhook URL（テスト用）</label>
+                        <input type="text" id="inputWebhookTest" placeholder="https://api.pushcut.io/...">
+                    </div>
+                    <button class="btn btn-secondary" id="btnTestWebhook">🔔 テスト通知を送信</button>
+                </div>
+            </section>
+
+            <!-- RSSI メーター -->
+            <section class="card" id="rssiCard" style="display:none;">
+                <div class="card-header">
+                    <h3>📶 電波強度（RSSI）</h3>
+                    <span class="rssi-value" id="rssiValue">-- dBm</span>
+                </div>
+                <div class="rssi-bar-container">
+                    <div class="rssi-bar" id="rssiBar"></div>
+                    <div class="rssi-threshold" id="rssiThresholdLine"></div>
+                </div>
+                <div class="rssi-labels">
+                    <span>遠い</span>
+                    <span class="rssi-threshold-label">閾値: <span id="thresholdDisplay">-60</span> dBm</span>
+                    <span>近い</span>
+                </div>
+                <div class="rssi-history" id="rssiHistory"></div>
+            </section>
+
+            <!-- 配信コントロール -->
+            <section class="card" id="streamCard">
+                <div class="card-header">
+                    <h3>🎬 YouTube Live 配信</h3>
+                    <span class="stream-badge" id="streamBadge">未接続</span>
+                </div>
+                <div class="stream-controls">
+                    <div id="ytAuthSection">
+                        <p class="hint">YouTube Live APIで配信を自動制御するには、Googleアカウントの連携が必要です。</p>
+                        <button class="btn btn-google" id="btnYtAuth">
+                            <svg class="google-icon" viewBox="0 0 24 24" width="20" height="20"><path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92a5.06 5.06 0 0 1-2.2 3.32v2.77h3.57c2.08-1.92 3.27-4.74 3.27-8.1z"/><path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/><path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"/><path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/></svg>
+                            Googleアカウント連携
+                        </button>
+                    </div>
+                    <div id="ytStreamSection" style="display:none;">
+                        <div class="stream-info">
+                            <div class="stream-info-item">
+                                <span class="label">チャンネル</span>
+                                <span class="value" id="ytChannelName">-</span>
+                            </div>
+                            <div class="stream-info-item">
+                                <span class="label">配信状態</span>
+                                <span class="value" id="ytStreamStatus">停止中</span>
+                            </div>
+                        </div>
+                        <div class="stream-actions">
+                            <button class="btn btn-live" id="btnStartStream" disabled>
+                                <span class="live-dot"></span>
+                                配信開始
+                            </button>
+                            <button class="btn btn-stop" id="btnStopStream" style="display:none;">
+                                ⏹ 配信停止
+                            </button>
+                        </div>
+                        <label class="toggle-row">
+                            <span>自動配信（ビーコン検知時に自動開始）</span>
+                            <input type="checkbox" id="chkAutoStream" checked>
+                            <span class="toggle-slider"></span>
+                        </label>
+                    </div>
+                </div>
+            </section>
+
+            <!-- 設定 -->
+            <section class="card" id="settingsCard">
+                <div class="card-header">
+                    <h3>⚙️ 設定</h3>
+                    <button class="btn-icon-only" id="btnToggleSettings" aria-label="設定を開く">
+                        <span>▼</span>
+                    </button>
+                </div>
+                <div class="settings-body" id="settingsBody">
+                    <div class="settings-group">
+                        <h4>iBeacon 識別情報</h4>
+                        <div class="form-field">
+                            <label for="inputUuid">UUID</label>
+                            <input type="text" id="inputUuid" value="7777772E-6B6B-6D63-6E2E-636F6D000001" placeholder="UUID">
+                        </div>
+                        <div class="form-row">
+                            <div class="form-field">
+                                <label for="inputMajor">Major</label>
+                                <input type="number" id="inputMajor" value="1" min="0" max="65535">
+                            </div>
+                            <div class="form-field">
+                                <label for="inputMinor">Minor</label>
+                                <input type="number" id="inputMinor" value="1" min="0" max="65535">
+                            </div>
+                        </div>
+                    </div>
+                    <div class="settings-group android-only">
+                        <h4>検知設定（Android BLEスキャン用）</h4>
+                        <div class="form-field">
+                            <label for="inputThreshold">RSSI閾値 (dBm)</label>
+                            <input type="range" id="inputThreshold" min="-100" max="-30" value="-60">
+                            <span class="range-value" id="thresholdRangeValue">-60 dBm</span>
+                        </div>
+                        <div class="form-field">
+                            <label for="inputDetectionCount">検知確定回数</label>
+                            <input type="number" id="inputDetectionCount" value="3" min="1" max="20">
+                        </div>
+                        <div class="form-field">
+                            <label for="inputScanInterval">スキャン間隔（秒）</label>
+                            <input type="number" id="inputScanInterval" value="3" min="1" max="30" step="1">
+                        </div>
+                    </div>
+                    <div class="settings-group">
+                        <h4>YouTube Live API</h4>
+                        <div class="form-field">
+                            <label for="inputClientId">Google OAuth Client ID</label>
+                            <input type="text" id="inputClientId" placeholder="xxxxx.apps.googleusercontent.com">
+                        </div>
+                        <p class="hint">Google Cloud Console で OAuth 2.0 クライアントIDを作成し、ここに入力してください。</p>
+                    </div>
+                    <button class="btn btn-secondary" id="btnSaveSettings">設定を保存</button>
+                </div>
+            </section>
+
+            <!-- ログ -->
+            <section class="card">
+                <div class="card-header">
+                    <h3>📋 ログ</h3>
+                    <button class="btn-text" id="btnClearLog">クリア</button>
+                </div>
+                <div class="log-container" id="logContainer">
+                    <div class="log-empty">ログはまだありません</div>
+                </div>
+            </section>
+        </main>
+
+        <!-- フッター -->
+        <footer id="footer">
+            <p>🐷 豚ライブ配信システム v2.0</p>
+            <p class="footer-sub">400-MMBLEBC9P3 BLE Beacon</p>
+        </footer>
+
+        <!-- 通知バナー -->
+        <div class="notification" id="notification">
+            <span class="notification-icon" id="notifIcon">ℹ️</span>
+            <span class="notification-text" id="notifText"></span>
+        </div>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>
