@@ -74,7 +74,7 @@ function cacheDom() {
         'inputClientId', 'logContainer', 'btnClearLog', 'notification',
         'notifIcon', 'notifText',
         'btnAndroid', 'btnIos', 'pushcutCard', 'pushcutBadge',
-        'inputWebhookTest', 'btnTestWebhook',
+        'inputWebhookTest', 'btnTestWebhook', 'btnCopyBluefyLink',
     ];
     ids.forEach(id => { dom[id] = document.getElementById(id); });
 }
@@ -156,6 +156,13 @@ function loadSettings() {
         }
     } catch (e) { /* ignore */ }
     applySettingsToForm();
+
+    // YouTubeトークンの復元
+    const savedToken = localStorage.getItem('pig-live-yt-token');
+    if (savedToken) {
+        state.ytAccessToken = savedToken;
+        fetchYouTubeChannel();
+    }
 }
 
 function saveSettings() {
@@ -212,6 +219,11 @@ function bindEvents() {
 
     // Webhookテスト
     dom.btnTestWebhook.addEventListener('click', testWebhook);
+
+    // Bluefy用リンクコピー
+    if (dom.btnCopyBluefyLink) {
+        dom.btnCopyBluefyLink.addEventListener('click', copyBluefyLink);
+    }
 
     // OAuth コールバック処理
     handleOAuthCallback();
@@ -517,6 +529,19 @@ function startYouTubeAuth() {
 }
 
 function handleOAuthCallback() {
+    // 1. URLパラメータからのインポート (?import_token=XXX)
+    const searchParams = new URLSearchParams(window.location.search);
+    const importToken = searchParams.get('import_token');
+    if (importToken) {
+        saveYtToken(importToken);
+        // URLをクリーンアップ
+        window.history.replaceState({}, document.title, window.location.pathname);
+        log('設定リンクからYouTube認証をインポートしました', 'success');
+        fetchYouTubeChannel();
+        return;
+    }
+
+    // 2. 通常のOAuthハッシュからの取得 (#access_token=XXX)
     const hash = window.location.hash;
     if (!hash || !hash.includes('access_token')) return;
 
@@ -524,11 +549,36 @@ function handleOAuthCallback() {
     const accessToken = params.get('access_token');
 
     if (accessToken) {
-        state.ytAccessToken = accessToken;
+        saveYtToken(accessToken);
         window.location.hash = '';
         log('YouTube認証に成功しました', 'success');
         fetchYouTubeChannel();
     }
+}
+
+function saveYtToken(token) {
+    state.ytAccessToken = token;
+    if (token) {
+        localStorage.setItem('pig-live-yt-token', token);
+    } else {
+        localStorage.removeItem('pig-live-yt-token');
+    }
+}
+
+function copyBluefyLink() {
+    if (!state.ytAccessToken) return;
+    const url = new URL(window.location.origin + window.location.pathname);
+    url.searchParams.set('import_token', state.ytAccessToken);
+    
+    // クリップボードにコピー
+    navigator.clipboard.writeText(url.toString()).then(() => {
+        notify('コピーしました！Bluefyで開いてください', 'success');
+        log('Bluefy用リンクをクリップボードにコピーしました', 'success');
+    }).catch(err => {
+        log(`リンクコピーに失敗: ${err.message}`, 'error');
+        // fallback
+        prompt('以下のURLをコピーしてBluefyで開いてください:', url.toString());
+    });
 }
 
 async function fetchYouTubeChannel() {
