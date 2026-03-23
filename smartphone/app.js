@@ -397,62 +397,16 @@ async function performSingleScan() {
 
 function handleAdvertisement(event) {
     const manufacturerData = event.manufacturerData;
-
-    // デバッグ: 何らかの広告を受信したらログに出す
     log(`📻 広告受信: ${event.device.name || '名前なし'} RSSI:${event.rssi}`, 'info');
 
-    if (!manufacturerData) {
-        log(`　└ manufacturerDataなし`, 'warning');
-        return;
-    }
+    if (!manufacturerData) return;
 
-    // manufacturerDataの型と中身をデバッグ出力
-    try {
-        log(`　└ 型:${manufacturerData.constructor?.name} size:${manufacturerData.size} entries:${[...manufacturerData.entries?.() ?? []].length}`, 'info');
-    } catch (e) {
-        log(`　└ 型確認エラー: ${e.message}`, 'error');
-    }
+    const ibeacon = extractIBeacon(manufacturerData);
+    if (!ibeacon) return;
 
-    // manufacturer dataのCompany IDをすべてログ出力
-    try {
-        const ids = [];
-        for (const [key] of manufacturerData) {
-            ids.push(`0x${key.toString(16).padStart(4,'0').toUpperCase()}`);
-        }
-        if (ids.length === 0) {
-            log(`　└ Company IDなし`, 'warning');
-            return;
-        }
-        log(`　└ Company IDs: ${ids.join(', ')}`, 'info');
-    } catch (e) {
-        log(`　└ Company ID列挙エラー: ${e.message}`, 'error');
-        return;
-    }
-
-    // Apple Company ID (0x004C) のデータを探す
-    const appleData = manufacturerData.get(APPLE_COMPANY_ID);
-    if (!appleData) {
-        log(`　└ Apple(0x004C)なし → iBeaconではない可能性あり`, 'warning');
-        return;
-    }
-
-    const data = new Uint8Array(appleData.buffer);
-
-    // iBeacon フォーマットチェック
-    if (data.length < 23 || data[0] !== IBEACON_TYPE_HI || data[1] !== IBEACON_TYPE_LO) return;
-
-    // UUID を解析
-    const uuidBytes = data.slice(2, 18);
-    const uuid = formatUUID(uuidBytes);
-
-    // Major / Minor を解析
-    const major = (data[18] << 8) | data[19];
-    const minor = (data[20] << 8) | data[21];
-
-    // デバッグ: iBeacon検出時に実際の値をログ出力
+    const { uuid, major, minor } = ibeacon;
     log(`🔵 iBeacon検出: UUID=${uuid} Major=${major} Minor=${minor}`, 'info');
 
-    // ターゲット判定
     if (uuid.toUpperCase() !== state.settings.uuid.toUpperCase()) {
         log(`　└ UUID不一致（設定値: ${state.settings.uuid}）`, 'warning');
         return;
@@ -462,9 +416,41 @@ function handleAdvertisement(event) {
         return;
     }
 
-    // RSSI
-    const rssi = event.rssi;
-    handleDetection(rssi);
+    handleDetection(event.rssi);
+}
+
+function extractIBeacon(manufacturerData) {
+    try {
+        // 標準 Web Bluetooth: BluetoothManufacturerDataMap (Map形式)
+        if (typeof manufacturerData.get === 'function') {
+            const appleData = manufacturerData.get(APPLE_COMPANY_ID);
+            if (!appleData) return null;
+            const bytes = new Uint8Array(appleData.buffer, appleData.byteOffset, appleData.byteLength);
+            return parseIBeaconBytes(bytes, 0);
+        }
+        // Bluefy: DataView (生バイト列、Company IDプレフィックスを含む場合あり)
+        if (manufacturerData.byteLength !== undefined) {
+            const bytes = new Uint8Array(manufacturerData.buffer, manufacturerData.byteOffset, manufacturerData.byteLength);
+            // Apple Company ID (0x4C 0x00) が先頭にあればスキップ
+            const offset = (bytes.length >= 2 && bytes[0] === 0x4C && bytes[1] === 0x00) ? 2 : 0;
+            return parseIBeaconBytes(bytes, offset);
+        }
+    } catch (e) {
+        log(`iBeacon解析エラー: ${e.message}`, 'error');
+    }
+    return null;
+}
+
+function parseIBeaconBytes(bytes, offset) {
+    if (bytes.length < offset + 21) return null;
+    if (bytes[offset] !== IBEACON_TYPE_HI || bytes[offset + 1] !== IBEACON_TYPE_LO) return null;
+    offset += 2;
+    const uuidBytes = bytes.slice(offset, offset + 16);
+    const uuid = formatUUID(uuidBytes);
+    offset += 16;
+    const major = (bytes[offset] << 8) | bytes[offset + 1];
+    const minor = (bytes[offset + 2] << 8) | bytes[offset + 3];
+    return { uuid, major, minor };
 }
 
 function formatUUID(bytes) {
