@@ -401,11 +401,22 @@ function handleAdvertisement(event) {
     // デバッグ: 何らかの広告を受信したらログに出す
     log(`📻 広告受信: ${event.device.name || '名前なし'} RSSI:${event.rssi}`, 'info');
 
-    if (!manufacturerData) return;
+    if (!manufacturerData || manufacturerData.size === 0) {
+        log(`　└ manufacturerDataなし`, 'warning');
+        return;
+    }
+
+    // manufacturer dataのCompany IDをすべてログ出力
+    const ids = [];
+    manufacturerData.forEach((_, key) => ids.push(`0x${key.toString(16).padStart(4,'0').toUpperCase()}`));
+    log(`　└ Company IDs: ${ids.join(', ')}`, 'info');
 
     // Apple Company ID (0x004C) のデータを探す
     const appleData = manufacturerData.get(APPLE_COMPANY_ID);
-    if (!appleData) return;
+    if (!appleData) {
+        log(`　└ Apple(0x004C)なし → iBeaconではない可能性あり`, 'warning');
+        return;
+    }
 
     const data = new Uint8Array(appleData.buffer);
 
