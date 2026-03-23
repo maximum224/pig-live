@@ -431,6 +431,9 @@ function extractIBeacon(manufacturerData) {
         // Bluefy: DataView (生バイト列、Company IDプレフィックスを含む場合あり)
         if (manufacturerData.byteLength !== undefined) {
             const bytes = new Uint8Array(manufacturerData.buffer, manufacturerData.byteOffset, manufacturerData.byteLength);
+            // 先頭16バイトをHEXでログ出力
+            const hex = Array.from(bytes.slice(0, 16)).map(b => b.toString(16).padStart(2,'0')).join(' ');
+            log(`　└ 生バイト(${bytes.length}B): ${hex}`, 'info');
             // Apple Company ID (0x4C 0x00) が先頭にあればスキップ
             const offset = (bytes.length >= 2 && bytes[0] === 0x4C && bytes[1] === 0x00) ? 2 : 0;
             return parseIBeaconBytes(bytes, offset);
