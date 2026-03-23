@@ -1,7 +1,7 @@
 /**
  * 🐷 豚ライブ配信システム - スマホ用Webアプリ
  *
- * BLE iBeacon検出 + YouTube Live 自動配信
+ * BLE iBeacon検出 + ふわっち自動配信（Larix Broadcaster連携）
  * 対応ビーコン: サンワサプライ 400-MMBLEBC9P3
  */
 
@@ -9,8 +9,6 @@
 const APPLE_COMPANY_ID = 0x004c;
 const IBEACON_TYPE_HI = 0x02;
 const IBEACON_TYPE_LO = 0x15;
-const YOUTUBE_API_SCOPE = 'https://www.googleapis.com/auth/youtube';
-const YOUTUBE_API_BASE = 'https://www.googleapis.com/youtube/v3';
 const STORAGE_KEY = 'pig-live-settings';
 
 // ===== 状態管理 =====
@@ -23,7 +21,8 @@ const state = {
         rssiThreshold: -60,
         detectionCountThreshold: 3,
         scanInterval: 3,
-        googleClientId: '',
+        streamKey: '',
+        rtmpUrl: 'rtmp://rtmp.whowatch.tv/live',
     },
     // 監視状態
     monitoring: false,
@@ -33,11 +32,7 @@ const state = {
     detectionCount: 0,
     lastRssi: null,
     rssiHistory: [],
-    // YouTube
-    ytAccessToken: null,
-    ytChannelName: null,
-    ytBroadcastId: null,
-    ytStreamId: null,
+    // 配信
     isStreaming: false,
     autoStream: true,
     // BLE
@@ -67,16 +62,15 @@ function cacheDom() {
         'headerStatus', 'statusCard', 'statusIcon', 'statusTitle', 'statusMessage',
         'btnToggleMonitor', 'rssiCard', 'rssiValue', 'rssiBar', 'rssiThresholdLine',
         'thresholdDisplay', 'rssiHistory', 'streamCard', 'streamBadge',
-        'ytAuthSection', 'ytStreamSection', 'btnYtAuth', 'ytChannelName',
-        'ytStreamStatus', 'btnStartStream', 'btnStopStream', 'chkAutoStream',
+        'streamStatus', 'btnStartStream', 'chkAutoStream',
         'settingsBody', 'btnToggleSettings', 'btnSaveSettings',
         'inputUuid', 'inputMajor', 'inputMinor', 'inputThreshold',
         'thresholdRangeValue', 'inputDetectionCount', 'inputScanInterval',
-        'inputClientId', 'logContainer', 'btnClearLog', 'notification',
+        'inputStreamKey', 'inputRtmpUrl', 'btnCopyLarixSettings',
+        'logContainer', 'btnClearLog', 'notification',
         'notifIcon', 'notifText',
         'btnAndroid', 'btnIos', 'pushcutCard', 'pushcutBadge',
-        'inputWebhookTest', 'btnTestWebhook', 'btnCopyBluefyLink',
-        'ytTokenSection', 'ytAuthStatus', 'btnReauth',
+        'inputWebhookTest', 'btnTestWebhook',
     ];
     ids.forEach(id => { dom[id] = document.getElementById(id); });
 }
@@ -158,15 +152,6 @@ function loadSettings() {
         }
     } catch (e) { /* ignore */ }
     applySettingsToForm();
-
-    // YouTubeトークンの復元
-    const savedToken = localStorage.getItem('pig-live-yt-token');
-    if (savedToken) {
-        state.ytAccessToken = savedToken;
-        dom.ytTokenSection.style.display = '';
-        dom.ytAuthSection.style.display = 'none';
-        fetchYouTubeChannel();
-    }
 }
 
 function saveSettings() {
@@ -186,7 +171,9 @@ function gatherSettingsFromForm() {
     state.settings.rssiThreshold = parseInt(dom.inputThreshold.value, 10);
     state.settings.detectionCountThreshold = parseInt(dom.inputDetectionCount.value, 10) || 3;
     state.settings.scanInterval = parseInt(dom.inputScanInterval.value, 10) || 3;
-    state.settings.googleClientId = dom.inputClientId.value.trim();
+    state.settings.streamKey = dom.inputStreamKey.value.trim();
+    state.settings.rtmpUrl = dom.inputRtmpUrl.value.trim();
+    updateStreamBadge();
 }
 
 function applySettingsToForm() {
@@ -198,8 +185,10 @@ function applySettingsToForm() {
     dom.thresholdDisplay.textContent = state.settings.rssiThreshold;
     dom.inputDetectionCount.value = state.settings.detectionCountThreshold;
     dom.inputScanInterval.value = state.settings.scanInterval;
-    dom.inputClientId.value = state.settings.googleClientId;
+    dom.inputStreamKey.value = state.settings.streamKey;
+    dom.inputRtmpUrl.value = state.settings.rtmpUrl;
     updateThresholdLine();
+    updateStreamBadge();
 }
 
 function bindEvents() {
@@ -207,16 +196,14 @@ function bindEvents() {
     dom.btnToggleSettings.addEventListener('click', toggleSettings);
     dom.btnSaveSettings.addEventListener('click', saveSettings);
     dom.btnClearLog.addEventListener('click', clearLog);
-    dom.btnYtAuth.addEventListener('click', startYouTubeAuth);
-    dom.btnReauth.addEventListener('click', startYouTubeAuth);
-    dom.btnStartStream.addEventListener('click', startYouTubeStream);
-    dom.btnStopStream.addEventListener('click', stopYouTubeStream);
+    dom.btnStartStream.addEventListener('click', openLarix);
     dom.chkAutoStream.addEventListener('change', (e) => {
         state.autoStream = e.target.checked;
     });
     dom.inputThreshold.addEventListener('input', (e) => {
         dom.thresholdRangeValue.textContent = `${e.target.value} dBm`;
     });
+    dom.btnCopyLarixSettings.addEventListener('click', copyLarixSettings);
 
     // プラットフォーム切替
     dom.btnAndroid.addEventListener('click', () => switchPlatform('android'));
@@ -224,14 +211,6 @@ function bindEvents() {
 
     // Webhookテスト
     dom.btnTestWebhook.addEventListener('click', testWebhook);
-
-    // Bluefy用リンクコピー
-    if (dom.btnCopyBluefyLink) {
-        dom.btnCopyBluefyLink.addEventListener('click', copyBluefyLink);
-    }
-
-    // OAuth コールバック処理
-    handleOAuthCallback();
 }
 
 async function testWebhook() {
@@ -503,10 +482,8 @@ function onPigDetected() {
     notify('🐷 豚が餌場に接近しました！', 'success');
     updateStatusUI('detected');
 
-    // 自動配信
-    if (state.autoStream && state.ytAccessToken && !state.isStreaming) {
-        log('自動配信を開始します...', 'info');
-        startYouTubeStream();
+    if (state.autoStream && !state.isStreaming) {
+        openLarix();
     }
 }
 
@@ -583,256 +560,45 @@ function renderRssiHistory() {
     });
 }
 
-// ===== YouTube Live API =====
+// ===== ふわっち配信（Larix Broadcaster連携） =====
 
-function startYouTubeAuth() {
-    gatherSettingsFromForm();
-    const clientId = state.settings.googleClientId;
-
-    if (!clientId) {
-        notify('Google OAuth Client ID を設定してください', 'error');
+function openLarix() {
+    if (!state.settings.streamKey) {
+        notify('設定からストリームキーを入力してください', 'error');
         toggleSettings(true);
         return;
     }
-
-    const redirectUri = window.location.origin + window.location.pathname;
-    const authUrl = `https://accounts.google.com/o/oauth2/v2/auth?` +
-        `client_id=${encodeURIComponent(clientId)}` +
-        `&redirect_uri=${encodeURIComponent(redirectUri)}` +
-        `&response_type=token` +
-        `&scope=${encodeURIComponent(YOUTUBE_API_SCOPE)}` +
-        `&prompt=consent`;
-
-    window.location.href = authUrl;
+    log('Larix Broadcasterを起動します...', 'info');
+    log('※ Larixで「自動接続」が有効になっていれば配信が自動開始されます', 'info');
+    state.isStreaming = true;
+    updateStreamBadge();
+    // Larixを起動（インストール済みの場合はアプリが開く）
+    window.location.href = 'larix://';
 }
 
-function handleOAuthCallback() {
-    // 1. URLパラメータからのインポート (?import_token=XXX)
-    const searchParams = new URLSearchParams(window.location.search);
-    const importToken = searchParams.get('import_token');
-    if (importToken) {
-        saveYtToken(importToken);
-        // URLをクリーンアップ
-        window.history.replaceState({}, document.title, window.location.pathname);
-        log('設定リンクからYouTube認証をインポートしました', 'success');
-        fetchYouTubeChannel();
+function copyLarixSettings() {
+    gatherSettingsFromForm();
+    const { rtmpUrl, streamKey } = state.settings;
+    if (!streamKey) {
+        notify('先にストリームキーを入力してください', 'error');
         return;
     }
-
-    // 2. 通常のOAuthハッシュからの取得 (#access_token=XXX)
-    const hash = window.location.hash;
-    if (!hash || !hash.includes('access_token')) return;
-
-    const params = new URLSearchParams(hash.substring(1));
-    const accessToken = params.get('access_token');
-
-    if (accessToken) {
-        saveYtToken(accessToken);
-        window.location.hash = '';
-        log('YouTube認証に成功しました', 'success');
-        fetchYouTubeChannel();
-    }
-}
-
-function saveYtToken(token) {
-    state.ytAccessToken = token;
-    if (token) {
-        localStorage.setItem('pig-live-yt-token', token);
-        dom.ytTokenSection.style.display = '';
-        dom.ytAuthSection.style.display = 'none';
-    } else {
-        localStorage.removeItem('pig-live-yt-token');
-        dom.ytTokenSection.style.display = 'none';
-        dom.ytAuthSection.style.display = '';
-    }
-}
-
-function copyBluefyLink() {
-    if (!state.ytAccessToken) return;
-    const url = new URL(window.location.origin + window.location.pathname);
-    url.searchParams.set('import_token', state.ytAccessToken);
-    
-    // クリップボードにコピー
-    navigator.clipboard.writeText(url.toString()).then(() => {
-        notify('コピーしました！Bluefyで開いてください', 'success');
-        log('Bluefy用リンクをクリップボードにコピーしました', 'success');
-    }).catch(err => {
-        log(`リンクコピーに失敗: ${err.message}`, 'error');
-        // fallback
-        prompt('以下のURLをコピーしてBluefyで開いてください:', url.toString());
+    const text = `RTMP URL: ${rtmpUrl}\nストリームキー: ${streamKey}`;
+    navigator.clipboard.writeText(text).then(() => {
+        notify('Larix設定をコピーしました', 'success');
+        log('Larix設定をクリップボードにコピーしました', 'success');
+    }).catch(() => {
+        prompt('Larixに入力してください:', text);
     });
 }
 
-async function fetchYouTubeChannel() {
-    dom.ytAuthStatus.textContent = 'チャンネル情報を取得中...';
-    try {
-        const res = await fetch(`${YOUTUBE_API_BASE}/channels?part=snippet&mine=true`, {
-            headers: { 'Authorization': `Bearer ${state.ytAccessToken}` }
-        });
-        const data = await res.json();
-
-        if (data.error) {
-            const isExpired = data.error.code === 401;
-            const msg = isExpired
-                ? 'トークン期限切れ - 「再認証」ボタンを押してください'
-                : `APIエラー: ${data.error.message}`;
-            dom.ytAuthStatus.textContent = msg;
-            log(`YouTube API エラー: ${data.error.message}`, 'error');
-            return;
-        }
-
-        if (data.items && data.items.length > 0) {
-            state.ytChannelName = data.items[0].snippet.title;
-            dom.ytChannelName.textContent = state.ytChannelName;
-            dom.ytAuthStatus.textContent = `✅ ${state.ytChannelName}`;
-            dom.ytStreamSection.style.display = '';
-            dom.streamBadge.textContent = '接続済み';
-            dom.streamBadge.className = 'stream-badge connected';
-            dom.btnStartStream.disabled = false;
-            log(`YouTube チャンネル: ${state.ytChannelName}`, 'success');
-        } else {
-            dom.ytAuthStatus.textContent = 'YouTubeチャンネルが見つかりません';
-            log('YouTubeチャンネルが見つかりません', 'warning');
-        }
-    } catch (err) {
-        dom.ytAuthStatus.textContent = `接続エラー: ${err.message}`;
-        log(`YouTube API エラー: ${err.message}`, 'error');
-    }
-}
-
-async function startYouTubeStream() {
-    if (!state.ytAccessToken) {
-        notify('YouTubeに接続してください', 'error');
-        return;
-    }
-
-    try {
-        log('YouTube Live 配信を作成中...', 'info');
-
-        // 1. Broadcast を作成
-        const now = new Date().toISOString();
-        const broadcastRes = await fetch(`${YOUTUBE_API_BASE}/liveBroadcasts?part=snippet,status,contentDetails`, {
-            method: 'POST',
-            headers: {
-                'Authorization': `Bearer ${state.ytAccessToken}`,
-                'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({
-                snippet: {
-                    title: `🐷 豚ライブ配信 - ${new Date().toLocaleString('ja-JP')}`,
-                    scheduledStartTime: now,
-                },
-                status: {
-                    privacyStatus: 'public',
-                    selfDeclaredMadeForKids: false,
-                },
-                contentDetails: {
-                    enableAutoStart: true,
-                    enableAutoStop: true,
-                },
-            }),
-        });
-
-        const broadcast = await broadcastRes.json();
-        if (broadcast.error) {
-            throw new Error(broadcast.error.message || 'Broadcast作成エラー');
-        }
-
-        state.ytBroadcastId = broadcast.id;
-        log(`Broadcast作成完了: ${broadcast.id}`, 'success');
-
-        // 2. Stream を作成
-        const streamRes = await fetch(`${YOUTUBE_API_BASE}/liveStreams?part=snippet,cdn`, {
-            method: 'POST',
-            headers: {
-                'Authorization': `Bearer ${state.ytAccessToken}`,
-                'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({
-                snippet: {
-                    title: '豚ライブ配信ストリーム',
-                },
-                cdn: {
-                    frameRate: '30fps',
-                    ingestionType: 'rtmp',
-                    resolution: '720p',
-                },
-            }),
-        });
-
-        const stream = await streamRes.json();
-        if (stream.error) {
-            throw new Error(stream.error.message || 'Stream作成エラー');
-        }
-
-        state.ytStreamId = stream.id;
-        const rtmpUrl = stream.cdn?.ingestionInfo?.ingestionAddress;
-        const streamKey = stream.cdn?.ingestionInfo?.streamName;
-
-        log(`Stream作成完了: ${stream.id}`, 'success');
-        if (rtmpUrl && streamKey) {
-            log(`RTMP URL: ${rtmpUrl}`, 'info');
-            log(`ストリームキー: ${streamKey}`, 'info');
-        }
-
-        // 3. Bind
-        const bindRes = await fetch(`${YOUTUBE_API_BASE}/liveBroadcasts/bind?id=${state.ytBroadcastId}&part=id,contentDetails&streamId=${state.ytStreamId}`, {
-            method: 'POST',
-            headers: { 'Authorization': `Bearer ${state.ytAccessToken}` },
-        });
-
-        const bindData = await bindRes.json();
-        if (bindData.error) {
-            throw new Error(bindData.error.message || 'Bind エラー');
-        }
-
-        state.isStreaming = true;
-        updateStreamUI();
-        log('✅ YouTube Live 配信を準備しました！', 'success');
-        notify('YouTube Live 配信を準備しました', 'success');
-
-    } catch (err) {
-        log(`YouTube Live エラー: ${err.message}`, 'error');
-        notify(`配信エラー: ${err.message}`, 'error');
-    }
-}
-
-async function stopYouTubeStream() {
-    if (!state.ytBroadcastId) return;
-
-    try {
-        // Transition to complete
-        await fetch(`${YOUTUBE_API_BASE}/liveBroadcasts/transition?broadcastStatus=complete&id=${state.ytBroadcastId}&part=id,status`, {
-            method: 'POST',
-            headers: { 'Authorization': `Bearer ${state.ytAccessToken}` },
-        });
-
-        state.isStreaming = false;
-        state.ytBroadcastId = null;
-        state.ytStreamId = null;
-        updateStreamUI();
-        log('⏹ YouTube Live 配信を停止しました', 'info');
-        notify('配信を停止しました', 'success');
-    } catch (err) {
-        log(`配信停止エラー: ${err.message}`, 'error');
-    }
-}
-
-function updateStreamUI() {
-    if (state.isStreaming) {
-        dom.ytStreamStatus.textContent = '配信中';
-        dom.ytStreamStatus.style.color = 'var(--accent)';
-        dom.btnStartStream.style.display = 'none';
-        dom.btnStopStream.style.display = '';
-        dom.streamBadge.textContent = 'LIVE';
-        dom.streamBadge.className = 'stream-badge live';
-    } else {
-        dom.ytStreamStatus.textContent = '停止中';
-        dom.ytStreamStatus.style.color = '';
-        dom.btnStartStream.style.display = '';
-        dom.btnStopStream.style.display = 'none';
-        dom.streamBadge.textContent = state.ytAccessToken ? '接続済み' : '未接続';
-        dom.streamBadge.className = state.ytAccessToken ? 'stream-badge connected' : 'stream-badge';
+function updateStreamBadge() {
+    if (!dom.streamBadge) return;
+    const hasKey = !!state.settings.streamKey;
+    dom.streamBadge.textContent = hasKey ? '設定済み' : '未設定';
+    dom.streamBadge.className = hasKey ? 'stream-badge connected' : 'stream-badge';
+    if (dom.streamStatus) {
+        dom.streamStatus.textContent = state.isStreaming ? '起動中...' : '停止中';
     }
 }
 
@@ -841,7 +607,7 @@ function updateStreamUI() {
 function updateUI() {
     updateStatusUI(state.monitoring ? 'monitoring' : 'idle');
     updateMonitorButton();
-    updateStreamUI();
+    updateStreamBadge();
     updateThresholdLine();
 }
 
