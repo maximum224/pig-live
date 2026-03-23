@@ -113,8 +113,8 @@ function switchPlatform(platform) {
     document.body.classList.add(`mode-${platform}`);
 
     if (platform === 'ios') {
-        // iOSモード: Bluefy検出チェック
-        if (state.bleSupported) {
+        // iOSモード: Bluefy検出チェック（初期化順序に依存しないよう直接チェック）
+        if (!!navigator.bluetooth) {
             // Bluefy等のBLE対応ブラウザを使用中 → BLEスキャン有効
             document.body.classList.remove('mode-ios');
             document.body.classList.add('mode-android'); // BLE系UIを表示
