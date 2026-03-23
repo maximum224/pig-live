@@ -396,9 +396,17 @@ async function performSingleScan() {
 }
 
 function handleAdvertisement(event) {
-    const manufacturerData = event.manufacturerData;
-    log(`📻 広告受信: ${event.device.name || '名前なし'} RSSI:${event.rssi}`, 'info');
+    const rssi = event.rssi;
+    log(`📻 広告受信: ${event.device.name || '名前なし'} RSSI:${rssi}`, 'info');
 
+    // watchAdvertisementsモード: ユーザーが選択済みのデバイスなのでRSSIをそのまま使用
+    if (state.bleDevice) {
+        handleDetection(rssi);
+        return;
+    }
+
+    // requestLEScanモード: iBeaconフォーマットを解析してUUID/Major/Minorを確認
+    const manufacturerData = event.manufacturerData;
     if (!manufacturerData) return;
 
     const ibeacon = extractIBeacon(manufacturerData);
@@ -416,7 +424,7 @@ function handleAdvertisement(event) {
         return;
     }
 
-    handleDetection(event.rssi);
+    handleDetection(rssi);
 }
 
 function extractIBeacon(manufacturerData) {
