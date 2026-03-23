@@ -358,11 +358,20 @@ async function startBLEScan() {
 }
 
 async function startPeriodicScan() {
-    log('デバイスリストからビーコンを選択してください...', 'info');
+    log('デバイスリストからビーコンを選択してください（iBeaconのみ表示）...', 'info');
 
-    const device = await navigator.bluetooth.requestDevice({
-        acceptAllDevices: true,
-    });
+    // iBeacon（Apple製造元データ 0x004C）のみ表示するフィルター
+    // acceptAllDevices にフォールバックも用意
+    let device;
+    try {
+        device = await navigator.bluetooth.requestDevice({
+            filters: [{ manufacturerData: [{ companyIdentifier: 0x004C }] }],
+        });
+    } catch (filterErr) {
+        // フィルターが効かない場合は全デバイス表示
+        log('iBeaconフィルター未対応のため全デバイスを表示します', 'warning');
+        device = await navigator.bluetooth.requestDevice({ acceptAllDevices: true });
+    }
 
     state.bleDevice = device;
     log(`ビーコン選択: ${device.name || '(名前なし)'}`, 'success');
