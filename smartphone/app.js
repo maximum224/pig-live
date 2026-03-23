@@ -43,6 +43,7 @@ const state = {
     // BLE
     bleSupported: false,
     bleDevice: null,
+    bleScan: null,
     // プラットフォーム
     platform: 'android', // 'android' or 'ios'
 };
@@ -320,11 +321,11 @@ async function startBLEScan() {
         const scanOptions = { acceptAllAdvertisements: true };
         const scanPromise = navigator.bluetooth.requestLEScan(scanOptions);
         
-        const scan = await Promise.race([scanPromise, timeoutPromise]);
+        state.bleScan = await Promise.race([scanPromise, timeoutPromise]);
 
         navigator.bluetooth.addEventListener('advertisementreceived', handleAdvertisement);
 
-        log('BLE広告スキャンを開始しました（リアルタイムモード）', 'success');
+        log(`BLE広告スキャンを開始しました（active:${state.bleScan?.active}）`, 'success');
     } catch (err) {
         log(`スキャン開始エラー: ${err.message}`, 'error');
         if (err.message.includes('タイムアウト')) {
@@ -482,6 +483,10 @@ function stopMonitoring() {
 
     // BLE scan stop
     try {
+        if (state.bleScan) {
+            state.bleScan.stop();
+            state.bleScan = null;
+        }
         navigator.bluetooth?.removeEventListener?.('advertisementreceived', handleAdvertisement);
     } catch (e) { /* ignore */ }
 
