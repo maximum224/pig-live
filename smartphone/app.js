@@ -10,6 +10,9 @@ const APPLE_COMPANY_ID = 0x004c;
 const IBEACON_TYPE_HI = 0x02;
 const IBEACON_TYPE_LO = 0x15;
 const STORAGE_KEY = 'pig-live-settings';
+const YT_TOKEN_KEY = 'pig-live-yt-token';
+const YOUTUBE_API_BASE = 'https://www.googleapis.com/youtube/v3';
+const YOUTUBE_API_SCOPE = 'https://www.googleapis.com/auth/youtube';
 
 // ===== 状態管理 =====
 const state = {
@@ -23,6 +26,8 @@ const state = {
         scanInterval: 3,
         streamKey: '',
         rtmpUrl: 'rtmp://rtmp.whowatch.tv/live',
+        streamingPlatform: 'fuwatchi', // 'fuwatchi' or 'youtube'
+        googleClientId: '',
     },
     // 監視状態
     monitoring: false,
@@ -41,6 +46,11 @@ const state = {
     bleScan: null,
     // プラットフォーム
     platform: 'android', // 'android' or 'ios'
+    // YouTube
+    ytAccessToken: null,
+    ytChannelName: null,
+    ytBroadcastId: null,
+    ytStreamId: null,
 };
 
 // ===== DOM要素 =====
@@ -53,6 +63,9 @@ document.addEventListener('DOMContentLoaded', () => {
     checkBleSupport();
     detectPlatform();
     bindEvents();
+    handleOAuthCallback();
+    loadYtToken();
+    switchStreamingPlatform(state.settings.streamingPlatform);
     updateUI();
     log('アプリを起動しました', 'info');
 });
@@ -67,10 +80,20 @@ function cacheDom() {
         'inputUuid', 'inputMajor', 'inputMinor', 'inputThreshold',
         'thresholdRangeValue', 'inputDetectionCount', 'inputScanInterval',
         'inputStreamKey', 'inputRtmpUrl', 'btnCopyLarixSettings',
+        'inputGoogleClientId',
         'logContainer', 'btnClearLog', 'notification',
         'notifIcon', 'notifText',
         'btnAndroid', 'btnIos', 'pushcutCard', 'pushcutBadge',
         'inputWebhookTest', 'btnTestWebhook',
+        // 配信プラットフォーム切替
+        'fuwatchiSection', 'youtubeSection',
+        'btnPlatformFuwatchi', 'btnPlatformYoutube',
+        // YouTube
+        'ytAuthSection', 'ytTokenSection', 'ytStreamSection',
+        'ytAuthStatus', 'btnYtAuth',
+        'ytChannelName', 'ytStreamStatus',
+        'btnYtStartStream', 'btnStopStream',
+        'btnCopyBluefyLink', 'btnReauth',
     ];
     ids.forEach(id => { dom[id] = document.getElementById(id); });
 }
@@ -173,6 +196,7 @@ function gatherSettingsFromForm() {
     state.settings.scanInterval = parseInt(dom.inputScanInterval.value, 10) || 3;
     state.settings.streamKey = dom.inputStreamKey.value.trim();
     state.settings.rtmpUrl = dom.inputRtmpUrl.value.trim();
+    if (dom.inputGoogleClientId) state.settings.googleClientId = dom.inputGoogleClientId.value.trim();
     updateStreamBadge();
 }
 
@@ -187,6 +211,7 @@ function applySettingsToForm() {
     dom.inputScanInterval.value = state.settings.scanInterval;
     dom.inputStreamKey.value = state.settings.streamKey;
     dom.inputRtmpUrl.value = state.settings.rtmpUrl;
+    if (dom.inputGoogleClientId) dom.inputGoogleClientId.value = state.settings.googleClientId;
     updateThresholdLine();
     updateStreamBadge();
 }
@@ -205,12 +230,28 @@ function bindEvents() {
     });
     dom.btnCopyLarixSettings.addEventListener('click', copyLarixSettings);
 
-    // プラットフォーム切替
+    // BLEプラットフォーム切替（Android/iPhone）
     dom.btnAndroid.addEventListener('click', () => switchPlatform('android'));
     dom.btnIos.addEventListener('click', () => switchPlatform('ios'));
 
     // Webhookテスト
     dom.btnTestWebhook.addEventListener('click', testWebhook);
+
+    // 配信プラットフォーム切替（ふわっち/YouTube）
+    if (dom.btnPlatformFuwatchi) dom.btnPlatformFuwatchi.addEventListener('click', () => switchStreamingPlatform('fuwatchi'));
+    if (dom.btnPlatformYoutube) dom.btnPlatformYoutube.addEventListener('click', () => switchStreamingPlatform('youtube'));
+
+    // YouTube
+    if (dom.btnYtAuth) dom.btnYtAuth.addEventListener('click', startYouTubeAuth);
+    if (dom.btnYtStartStream) dom.btnYtStartStream.addEventListener('click', startYouTubeStream);
+    if (dom.btnStopStream) dom.btnStopStream.addEventListener('click', stopYouTubeStream);
+    if (dom.btnCopyBluefyLink) dom.btnCopyBluefyLink.addEventListener('click', copyBluefyLink);
+    if (dom.btnReauth) dom.btnReauth.addEventListener('click', () => {
+        state.ytAccessToken = null;
+        localStorage.removeItem(YT_TOKEN_KEY);
+        updateYouTubeUI();
+        startYouTubeAuth();
+    });
 }
 
 async function testWebhook() {
@@ -483,7 +524,11 @@ function onPigDetected() {
     updateStatusUI('detected');
 
     if (state.autoStream && !state.isStreaming) {
-        openLarix();
+        if (state.settings.streamingPlatform === 'youtube') {
+            startYouTubeStream();
+        } else {
+            openLarix();
+        }
     }
 }
 
@@ -594,11 +639,20 @@ function copyLarixSettings() {
 
 function updateStreamBadge() {
     if (!dom.streamBadge) return;
-    const hasKey = !!state.settings.streamKey;
-    dom.streamBadge.textContent = hasKey ? '設定済み' : '未設定';
-    dom.streamBadge.className = hasKey ? 'stream-badge connected' : 'stream-badge';
-    if (dom.streamStatus) {
-        dom.streamStatus.textContent = state.isStreaming ? '起動中...' : '停止中';
+    if (state.settings.streamingPlatform === 'youtube') {
+        const connected = !!state.ytAccessToken;
+        dom.streamBadge.textContent = connected ? '連携済み' : '未連携';
+        dom.streamBadge.className = connected ? 'stream-badge connected' : 'stream-badge';
+        if (dom.ytStreamStatus) {
+            dom.ytStreamStatus.textContent = state.isStreaming ? '配信中' : '停止中';
+        }
+    } else {
+        const hasKey = !!state.settings.streamKey;
+        dom.streamBadge.textContent = hasKey ? '設定済み' : '未設定';
+        dom.streamBadge.className = hasKey ? 'stream-badge connected' : 'stream-badge';
+        if (dom.streamStatus) {
+            dom.streamStatus.textContent = state.isStreaming ? '起動中...' : '停止中';
+        }
     }
 }
 
@@ -704,6 +758,243 @@ function escapeHtml(str) {
     const div = document.createElement('div');
     div.textContent = str;
     return div.innerHTML;
+}
+
+// ===== 配信プラットフォーム切替 =====
+
+function switchStreamingPlatform(platform) {
+    state.settings.streamingPlatform = platform;
+    if (dom.btnPlatformFuwatchi) dom.btnPlatformFuwatchi.classList.toggle('active', platform === 'fuwatchi');
+    if (dom.btnPlatformYoutube) dom.btnPlatformYoutube.classList.toggle('active', platform === 'youtube');
+    if (dom.fuwatchiSection) dom.fuwatchiSection.style.display = platform === 'fuwatchi' ? '' : 'none';
+    if (dom.youtubeSection) dom.youtubeSection.style.display = platform === 'youtube' ? '' : 'none';
+    updateStreamBadge();
+}
+
+// ===== YouTube Live API =====
+
+function getPageBaseUrl() {
+    return window.location.href.split('#')[0].split('?')[0];
+}
+
+function startYouTubeAuth() {
+    if (!state.settings.googleClientId) {
+        notify('設定からGoogleクライアントIDを入力してください', 'error');
+        toggleSettings(true);
+        return;
+    }
+    const params = new URLSearchParams({
+        client_id: state.settings.googleClientId,
+        redirect_uri: getPageBaseUrl(),
+        response_type: 'token',
+        scope: YOUTUBE_API_SCOPE,
+        include_granted_scopes: 'true',
+    });
+    window.location.href = `https://accounts.google.com/o/oauth2/v2/auth?${params}`;
+}
+
+function handleOAuthCallback() {
+    if (!window.location.hash) return;
+    const params = new URLSearchParams(window.location.hash.substring(1));
+    const token = params.get('access_token');
+    if (!token) return;
+
+    history.replaceState(null, '', window.location.pathname + window.location.search);
+    saveYtToken(token);
+    state.ytAccessToken = token;
+    log('✅ YouTubeトークンを取得しました', 'success');
+    notify('Google連携が完了しました', 'success');
+    updateYouTubeUI();
+    fetchYouTubeChannel();
+}
+
+function saveYtToken(token) {
+    try { localStorage.setItem(YT_TOKEN_KEY, token); } catch (e) { /* ignore */ }
+}
+
+function loadYtToken() {
+    try {
+        const token = localStorage.getItem(YT_TOKEN_KEY);
+        if (token) {
+            state.ytAccessToken = token;
+            updateYouTubeUI();
+            fetchYouTubeChannel();
+        }
+    } catch (e) { /* ignore */ }
+}
+
+function copyBluefyLink() {
+    let url;
+    if (window.location.hash && window.location.hash.includes('access_token')) {
+        url = window.location.href;
+    } else if (state.ytAccessToken) {
+        url = `${getPageBaseUrl()}#access_token=${state.ytAccessToken}`;
+    } else {
+        notify('先にGoogleアカウント連携してください', 'error');
+        return;
+    }
+    navigator.clipboard.writeText(url).then(() => {
+        notify('Bluefy用リンクをコピーしました', 'success');
+    }).catch(() => { prompt('コピーしてBluefyで開いてください:', url); });
+}
+
+async function fetchYouTubeChannel() {
+    if (!state.ytAccessToken) return;
+    if (dom.ytAuthStatus) dom.ytAuthStatus.textContent = 'チャンネル情報を取得中...';
+
+    try {
+        const res = await fetch(`${YOUTUBE_API_BASE}/channels?part=snippet&mine=true`, {
+            headers: { Authorization: `Bearer ${state.ytAccessToken}` },
+        });
+
+        if (res.status === 401) {
+            state.ytAccessToken = null;
+            localStorage.removeItem(YT_TOKEN_KEY);
+            updateYouTubeUI();
+            log('❌ トークンの有効期限が切れています。再認証してください。', 'error');
+            notify('トークンの有効期限が切れています', 'error');
+            return;
+        }
+
+        const data = await res.json();
+        if (data.items && data.items.length > 0) {
+            state.ytChannelName = data.items[0].snippet.title;
+            if (dom.ytChannelName) dom.ytChannelName.textContent = state.ytChannelName;
+            if (dom.ytAuthStatus) dom.ytAuthStatus.textContent = `接続済み: ${state.ytChannelName}`;
+            if (dom.ytStreamSection) dom.ytStreamSection.style.display = '';
+            if (dom.btnYtStartStream) dom.btnYtStartStream.disabled = false;
+            log(`✅ チャンネル: ${state.ytChannelName}`, 'success');
+            updateStreamBadge();
+        } else {
+            if (dom.ytAuthStatus) dom.ytAuthStatus.textContent = 'チャンネルが見つかりません';
+            log('❌ YouTubeチャンネルが見つかりません', 'error');
+        }
+    } catch (err) {
+        if (dom.ytAuthStatus) dom.ytAuthStatus.textContent = `エラー: ${err.message}`;
+        log(`❌ チャンネル取得エラー: ${err.message}`, 'error');
+    }
+}
+
+async function startYouTubeStream() {
+    if (!state.ytAccessToken) {
+        notify('先にGoogleアカウント連携してください', 'error');
+        return;
+    }
+    try {
+        log('YouTube Liveを開始します...', 'info');
+        if (dom.btnYtStartStream) dom.btnYtStartStream.disabled = true;
+        if (dom.ytStreamStatus) dom.ytStreamStatus.textContent = '準備中...';
+
+        const now = new Date();
+
+        // 1. ライブブロードキャストを作成
+        const broadcastRes = await fetch(`${YOUTUBE_API_BASE}/liveBroadcasts?part=snippet,status,contentDetails`, {
+            method: 'POST',
+            headers: { Authorization: `Bearer ${state.ytAccessToken}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                snippet: {
+                    title: `🐷 豚ライブ ${now.toLocaleDateString('ja-JP')} ${now.toLocaleTimeString('ja-JP')}`,
+                    scheduledStartTime: now.toISOString(),
+                },
+                status: { privacyStatus: 'unlisted' },
+                contentDetails: { enableAutoStart: true, enableAutoStop: true },
+            }),
+        });
+        if (!broadcastRes.ok) {
+            const err = await broadcastRes.json();
+            throw new Error(err.error?.message || `HTTP ${broadcastRes.status}`);
+        }
+        const broadcast = await broadcastRes.json();
+        state.ytBroadcastId = broadcast.id;
+        log(`ブロードキャスト作成: ${broadcast.id}`, 'info');
+
+        // 2. ライブストリームを作成
+        const streamRes = await fetch(`${YOUTUBE_API_BASE}/liveStreams?part=snippet,cdn`, {
+            method: 'POST',
+            headers: { Authorization: `Bearer ${state.ytAccessToken}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                snippet: { title: '豚ライブストリーム' },
+                cdn: { frameRate: '30fps', ingestionType: 'rtmp', resolution: '720p' },
+            }),
+        });
+        if (!streamRes.ok) {
+            const err = await streamRes.json();
+            throw new Error(err.error?.message || `HTTP ${streamRes.status}`);
+        }
+        const stream = await streamRes.json();
+        state.ytStreamId = stream.id;
+        const rtmpUrl = stream.cdn?.ingestionInfo?.ingestionAddress || '';
+        const streamKey = stream.cdn?.ingestionInfo?.streamName || '';
+        log(`ストリーム作成完了`, 'info');
+
+        // 3. バインド
+        await fetch(`${YOUTUBE_API_BASE}/liveBroadcasts/bind?id=${state.ytBroadcastId}&part=id,contentDetails&streamId=${state.ytStreamId}`, {
+            method: 'POST',
+            headers: { Authorization: `Bearer ${state.ytAccessToken}`, 'Content-Type': 'application/json' },
+            body: '{}',
+        });
+        log('ストリームをバインドしました', 'info');
+
+        // 4. RTMP情報をクリップボードにコピー
+        const rtmpInfo = `RTMP URL: ${rtmpUrl}\nストリームキー: ${streamKey}`;
+        try {
+            await navigator.clipboard.writeText(rtmpInfo);
+            notify('RTMP設定をコピーしました。Larixに貼り付けてください', 'success');
+        } catch (e) {
+            prompt('LarixのRTMP設定に入力してください:', rtmpInfo);
+        }
+
+        state.isStreaming = true;
+        if (dom.ytStreamStatus) dom.ytStreamStatus.textContent = 'Larix起動中...';
+        if (dom.btnYtStartStream) dom.btnYtStartStream.style.display = 'none';
+        if (dom.btnStopStream) dom.btnStopStream.style.display = '';
+
+        log('Larix Broadcasterを起動します...', 'info');
+        setTimeout(() => { window.location.href = 'larix://'; }, 1000);
+
+    } catch (err) {
+        log(`❌ YouTube配信開始エラー: ${err.message}`, 'error');
+        notify(`配信開始エラー: ${err.message}`, 'error');
+        if (dom.btnYtStartStream) { dom.btnYtStartStream.disabled = false; dom.btnYtStartStream.style.display = ''; }
+        if (dom.ytStreamStatus) dom.ytStreamStatus.textContent = 'エラー';
+    }
+}
+
+async function stopYouTubeStream() {
+    if (state.ytAccessToken && state.ytBroadcastId) {
+        try {
+            log('YouTube Liveを停止します...', 'info');
+            await fetch(`${YOUTUBE_API_BASE}/liveBroadcasts/transition?broadcastStatus=complete&id=${state.ytBroadcastId}&part=id,status`, {
+                method: 'POST',
+                headers: { Authorization: `Bearer ${state.ytAccessToken}`, 'Content-Type': 'application/json' },
+                body: '{}',
+            });
+            log('⏹ YouTube Liveを停止しました', 'info');
+            notify('配信を停止しました', 'info');
+        } catch (err) {
+            log(`❌ 配信停止エラー: ${err.message}`, 'error');
+        }
+    }
+    state.ytBroadcastId = null;
+    state.ytStreamId = null;
+    state.isStreaming = false;
+    if (dom.btnYtStartStream) { dom.btnYtStartStream.style.display = ''; dom.btnYtStartStream.disabled = false; }
+    if (dom.btnStopStream) dom.btnStopStream.style.display = 'none';
+    if (dom.ytStreamStatus) dom.ytStreamStatus.textContent = '停止中';
+    updateStreamBadge();
+}
+
+function updateYouTubeUI() {
+    if (!dom.ytAuthSection) return;
+    if (state.ytAccessToken) {
+        dom.ytAuthSection.style.display = 'none';
+        if (dom.ytTokenSection) dom.ytTokenSection.style.display = '';
+    } else {
+        dom.ytAuthSection.style.display = '';
+        if (dom.ytTokenSection) dom.ytTokenSection.style.display = 'none';
+        if (dom.ytStreamSection) dom.ytStreamSection.style.display = 'none';
+    }
+    updateStreamBadge();
 }
 
 // ===== 通知 =====
