@@ -75,6 +75,7 @@ function cacheDom() {
         'notifIcon', 'notifText',
         'btnAndroid', 'btnIos', 'pushcutCard', 'pushcutBadge',
         'inputWebhookTest', 'btnTestWebhook', 'btnCopyBluefyLink',
+        'ytTokenSection', 'ytAuthStatus', 'btnReauth',
     ];
     ids.forEach(id => { dom[id] = document.getElementById(id); });
 }
@@ -161,6 +162,8 @@ function loadSettings() {
     const savedToken = localStorage.getItem('pig-live-yt-token');
     if (savedToken) {
         state.ytAccessToken = savedToken;
+        dom.ytTokenSection.style.display = '';
+        dom.ytAuthSection.style.display = 'none';
         fetchYouTubeChannel();
     }
 }
@@ -204,6 +207,7 @@ function bindEvents() {
     dom.btnSaveSettings.addEventListener('click', saveSettings);
     dom.btnClearLog.addEventListener('click', clearLog);
     dom.btnYtAuth.addEventListener('click', startYouTubeAuth);
+    dom.btnReauth.addEventListener('click', startYouTubeAuth);
     dom.btnStartStream.addEventListener('click', startYouTubeStream);
     dom.btnStopStream.addEventListener('click', stopYouTubeStream);
     dom.chkAutoStream.addEventListener('change', (e) => {
@@ -573,8 +577,12 @@ function saveYtToken(token) {
     state.ytAccessToken = token;
     if (token) {
         localStorage.setItem('pig-live-yt-token', token);
+        dom.ytTokenSection.style.display = '';
+        dom.ytAuthSection.style.display = 'none';
     } else {
         localStorage.removeItem('pig-live-yt-token');
+        dom.ytTokenSection.style.display = 'none';
+        dom.ytAuthSection.style.display = '';
     }
 }
 
@@ -595,23 +603,38 @@ function copyBluefyLink() {
 }
 
 async function fetchYouTubeChannel() {
+    dom.ytAuthStatus.textContent = 'チャンネル情報を取得中...';
     try {
         const res = await fetch(`${YOUTUBE_API_BASE}/channels?part=snippet&mine=true`, {
             headers: { 'Authorization': `Bearer ${state.ytAccessToken}` }
         });
         const data = await res.json();
 
+        if (data.error) {
+            const isExpired = data.error.code === 401;
+            const msg = isExpired
+                ? 'トークン期限切れ - 「再認証」ボタンを押してください'
+                : `APIエラー: ${data.error.message}`;
+            dom.ytAuthStatus.textContent = msg;
+            log(`YouTube API エラー: ${data.error.message}`, 'error');
+            return;
+        }
+
         if (data.items && data.items.length > 0) {
             state.ytChannelName = data.items[0].snippet.title;
             dom.ytChannelName.textContent = state.ytChannelName;
-            dom.ytAuthSection.style.display = 'none';
+            dom.ytAuthStatus.textContent = `✅ ${state.ytChannelName}`;
             dom.ytStreamSection.style.display = '';
             dom.streamBadge.textContent = '接続済み';
             dom.streamBadge.className = 'stream-badge connected';
             dom.btnStartStream.disabled = false;
             log(`YouTube チャンネル: ${state.ytChannelName}`, 'success');
+        } else {
+            dom.ytAuthStatus.textContent = 'YouTubeチャンネルが見つかりません';
+            log('YouTubeチャンネルが見つかりません', 'warning');
         }
     } catch (err) {
+        dom.ytAuthStatus.textContent = `接続エラー: ${err.message}`;
         log(`YouTube API エラー: ${err.message}`, 'error');
     }
 }

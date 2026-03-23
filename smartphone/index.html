@@ -131,20 +131,30 @@
                             Googleアカウント連携
                         </button>
                     </div>
+                    <!-- トークン取得済み時に常時表示（チャンネル取得成否に関わらず） -->
+                    <div id="ytTokenSection" style="display:none;">
+                        <div class="stream-info-item" style="margin-bottom:10px;">
+                            <span class="label">認証状態</span>
+                            <span class="value" id="ytAuthStatus">チャンネル情報を取得中...</span>
+                        </div>
+                        <div style="display:flex; gap:8px; flex-wrap:wrap;">
+                            <button class="btn btn-secondary" id="btnCopyBluefyLink" style="font-size:0.85rem;">
+                                🔗 Bluefy用リンクをコピー
+                            </button>
+                            <button class="btn btn-secondary" id="btnReauth" style="font-size:0.85rem;">
+                                🔄 再認証
+                            </button>
+                        </div>
+                    </div>
                     <div id="ytStreamSection" style="display:none;">
                         <div class="stream-info">
                             <div class="stream-info-item">
                                 <span class="label">チャンネル</span>
                                 <span class="value" id="ytChannelName">-</span>
                             </div>
-                            <div class="stream-info-item" style="display:flex; justify-content:space-between; align-items:center;">
-                                <div>
-                                    <span class="label">配信状態</span>
-                                    <span class="value" id="ytStreamStatus">停止中</span>
-                                </div>
-                                <button class="btn-text" id="btnCopyBluefyLink" style="font-size:0.85rem; padding:4px 8px; border:1px solid var(--border); border-radius:4px;">
-                                    🔗 Bluefy用リンクをコピー
-                                </button>
+                            <div class="stream-info-item">
+                                <span class="label">配信状態</span>
+                                <span class="value" id="ytStreamStatus">停止中</span>
                             </div>
                         </div>
                         <div class="stream-actions">
