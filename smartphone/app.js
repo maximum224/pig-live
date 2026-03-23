@@ -54,8 +54,8 @@ const dom = {};
 document.addEventListener('DOMContentLoaded', () => {
     cacheDom();
     loadSettings();
-    detectPlatform();
     checkBleSupport();
+    detectPlatform();
     bindEvents();
     updateUI();
     log('アプリを起動しました', 'info');
