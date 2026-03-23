@@ -384,6 +384,10 @@ async function performSingleScan() {
 
 function handleAdvertisement(event) {
     const manufacturerData = event.manufacturerData;
+
+    // デバッグ: 何らかの広告を受信したらログに出す
+    log(`📻 広告受信: ${event.device.name || '名前なし'} RSSI:${event.rssi}`, 'info');
+
     if (!manufacturerData) return;
 
     // Apple Company ID (0x004C) のデータを探す
@@ -403,9 +407,18 @@ function handleAdvertisement(event) {
     const major = (data[18] << 8) | data[19];
     const minor = (data[20] << 8) | data[21];
 
+    // デバッグ: iBeacon検出時に実際の値をログ出力
+    log(`🔵 iBeacon検出: UUID=${uuid} Major=${major} Minor=${minor}`, 'info');
+
     // ターゲット判定
-    if (uuid.toUpperCase() !== state.settings.uuid.toUpperCase()) return;
-    if (major !== state.settings.major || minor !== state.settings.minor) return;
+    if (uuid.toUpperCase() !== state.settings.uuid.toUpperCase()) {
+        log(`　└ UUID不一致（設定値: ${state.settings.uuid}）`, 'warning');
+        return;
+    }
+    if (major !== state.settings.major || minor !== state.settings.minor) {
+        log(`　└ Major/Minor不一致（設定値: ${state.settings.major}/${state.settings.minor}）`, 'warning');
+        return;
+    }
 
     // RSSI
     const rssi = event.rssi;
