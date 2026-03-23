@@ -338,11 +338,23 @@ async function startBLEScan() {
 }
 
 async function startPeriodicScan() {
-    log('定期スキャンモードで監視を開始します', 'info');
-    log('※ ブラウザの制限により、スキャンごとにデバイス選択が必要な場合があります', 'warning');
+    log('デバイスリストからビーコンを選択してください...', 'info');
 
-    state.monitoring = true;
-    scheduleScan();
+    const device = await navigator.bluetooth.requestDevice({
+        acceptAllDevices: true,
+    });
+
+    state.bleDevice = device;
+    log(`ビーコン選択: ${device.name || '(名前なし)'}`, 'success');
+
+    if (!device.watchAdvertisements) {
+        log('このブラウザはwatchAdvertisementsに対応していません', 'error');
+        throw new Error('watchAdvertisements非対応');
+    }
+
+    device.addEventListener('advertisementreceived', handleAdvertisement);
+    await device.watchAdvertisements();
+    log('広告監視を開始しました（watchAdvertisementsモード）', 'success');
 }
 
 function scheduleScan() {
@@ -486,6 +498,11 @@ function stopMonitoring() {
         if (state.bleScan) {
             state.bleScan.stop();
             state.bleScan = null;
+        }
+        if (state.bleDevice) {
+            try { state.bleDevice.unwatchAdvertisements?.(); } catch (e) {}
+            state.bleDevice.removeEventListener('advertisementreceived', handleAdvertisement);
+            state.bleDevice = null;
         }
         navigator.bluetooth?.removeEventListener?.('advertisementreceived', handleAdvertisement);
     } catch (e) { /* ignore */ }
