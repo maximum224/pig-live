@@ -160,6 +160,18 @@
                             <span class="label">認証状態</span>
                             <span class="value" id="ytAuthStatus">チャンネル情報を取得中...</span>
                         </div>
+                        <div id="ytRtmpInfo" style="display:none; background:rgba(255,255,255,0.05); border-radius:8px; padding:10px; margin-bottom:10px;">
+                            <p class="hint" style="margin:0 0 6px;">📋 Larixに一度だけ設定してください（以降は自動）</p>
+                            <div class="stream-info-item">
+                                <span class="label">RTMP URL</span>
+                                <span class="value" id="ytRtmpUrl" style="font-size:0.8rem;">-</span>
+                            </div>
+                            <div class="stream-info-item">
+                                <span class="label">ストリームキー</span>
+                                <span class="value" id="ytRtmpKey" style="font-size:0.8rem; word-break:break-all;">-</span>
+                            </div>
+                            <button class="btn btn-secondary" id="btnCopyRtmpInfo" style="font-size:0.85rem; margin-top:6px;">📋 コピー</button>
+                        </div>
                         <div style="display:flex; gap:8px; flex-wrap:wrap;">
                             <button class="btn btn-secondary" id="btnCopyBluefyLink" style="font-size:0.85rem;">
                                 🔗 Bluefy用リンクをコピー

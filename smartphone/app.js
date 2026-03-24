@@ -96,6 +96,7 @@ function cacheDom() {
         'ytChannelName', 'ytStreamStatus',
         'btnYtStartStream', 'btnStopStream',
         'btnCopyBluefyLink', 'btnReauth',
+        'ytRtmpInfo', 'ytRtmpUrl', 'ytRtmpKey', 'btnCopyRtmpInfo',
     ];
     ids.forEach(id => { dom[id] = document.getElementById(id); });
 }
@@ -250,6 +251,7 @@ function bindEvents() {
     if (dom.btnYtStartStream) dom.btnYtStartStream.addEventListener('click', startYouTubeStream);
     if (dom.btnStopStream) dom.btnStopStream.addEventListener('click', stopYouTubeStream);
     if (dom.btnCopyBluefyLink) dom.btnCopyBluefyLink.addEventListener('click', copyBluefyLink);
+    if (dom.btnCopyRtmpInfo) dom.btnCopyRtmpInfo.addEventListener('click', copyYtRtmpInfo);
     if (dom.btnReauth) dom.btnReauth.addEventListener('click', () => {
         state.ytAccessToken = null;
         localStorage.removeItem(YT_TOKEN_KEY);
@@ -916,6 +918,7 @@ async function fetchYouTubeChannel() {
             if (dom.btnYtStartStream) dom.btnYtStartStream.disabled = false;
             log(`✅ チャンネル: ${state.ytChannelName}`, 'success');
             updateStreamBadge();
+            fetchYtPersistentStreamInfo(); // RTMP情報を表示
         } else {
             if (dom.ytAuthStatus) dom.ytAuthStatus.textContent = 'チャンネルが見つかりません';
             log('❌ YouTubeチャンネルが見つかりません', 'error');
@@ -924,6 +927,37 @@ async function fetchYouTubeChannel() {
         if (dom.ytAuthStatus) dom.ytAuthStatus.textContent = `エラー: ${err.message}`;
         log(`❌ チャンネル取得エラー: ${err.message}`, 'error');
     }
+}
+
+async function fetchYtPersistentStreamInfo() {
+    if (!state.ytAccessToken) return;
+    try {
+        const res = await fetch(`${YOUTUBE_API_BASE}/liveStreams?part=id,cdn&mine=true`, {
+            headers: { Authorization: `Bearer ${state.ytAccessToken}` },
+        });
+        const data = await res.json();
+        if (data.items && data.items.length > 0) {
+            const s = data.items[0];
+            state.ytStreamId = s.id;
+            const rtmpUrl = s.cdn?.ingestionInfo?.ingestionAddress || '';
+            const rtmpKey = s.cdn?.ingestionInfo?.streamName || '';
+            if (dom.ytRtmpUrl) dom.ytRtmpUrl.textContent = rtmpUrl || '未取得';
+            if (dom.ytRtmpKey) dom.ytRtmpKey.textContent = rtmpKey || '未取得';
+            if (dom.ytRtmpInfo) dom.ytRtmpInfo.style.display = '';
+            log(`✅ 永続ストリームキー取得済み`, 'success');
+        }
+    } catch (e) {
+        log(`RTMP情報取得エラー: ${e.message}`, 'warning');
+    }
+}
+
+function copyYtRtmpInfo() {
+    const url = dom.ytRtmpUrl?.textContent || '';
+    const key = dom.ytRtmpKey?.textContent || '';
+    const text = `RTMP URL: ${url}\nストリームキー: ${key}`;
+    navigator.clipboard.writeText(text).then(() => {
+        notify('RTMP設定をコピーしました', 'success');
+    }).catch(() => { prompt('Larixに入力してください:', text); });
 }
 
 async function startYouTubeStream() {
@@ -938,7 +972,37 @@ async function startYouTubeStream() {
 
         const now = new Date();
 
-        // 1. ライブブロードキャストを作成
+        // 1. 永続ストリームを取得（なければ作成）
+        let streamId = state.ytStreamId;
+        if (!streamId) {
+            const streamsRes = await fetch(`${YOUTUBE_API_BASE}/liveStreams?part=id,cdn&mine=true`, {
+                headers: { Authorization: `Bearer ${state.ytAccessToken}` },
+            });
+            const streamsData = await streamsRes.json();
+            if (streamsData.items && streamsData.items.length > 0) {
+                // 既存の永続ストリームを使い回す
+                const s = streamsData.items[0];
+                streamId = s.id;
+                state.ytStreamId = streamId;
+                log(`✅ 永続ストリームを使用: ${streamId}`, 'info');
+            } else {
+                // 初回のみ新規作成
+                const newStreamRes = await fetch(`${YOUTUBE_API_BASE}/liveStreams?part=snippet,cdn`, {
+                    method: 'POST',
+                    headers: { Authorization: `Bearer ${state.ytAccessToken}`, 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        snippet: { title: '豚ライブストリーム' },
+                        cdn: { frameRate: '30fps', ingestionType: 'rtmp', resolution: '720p' },
+                    }),
+                });
+                const newStream = await newStreamRes.json();
+                streamId = newStream.id;
+                state.ytStreamId = streamId;
+                log(`新規ストリーム作成: ${streamId}`, 'info');
+            }
+        }
+
+        // 2. ブロードキャストを作成
         const broadcastRes = await fetch(`${YOUTUBE_API_BASE}/liveBroadcasts?part=snippet,status,contentDetails`, {
             method: 'POST',
             headers: { Authorization: `Bearer ${state.ytAccessToken}`, 'Content-Type': 'application/json' },
@@ -959,49 +1023,29 @@ async function startYouTubeStream() {
         state.ytBroadcastId = broadcast.id;
         log(`ブロードキャスト作成: ${broadcast.id}`, 'info');
 
-        // 2. ライブストリームを作成
-        const streamRes = await fetch(`${YOUTUBE_API_BASE}/liveStreams?part=snippet,cdn`, {
-            method: 'POST',
-            headers: { Authorization: `Bearer ${state.ytAccessToken}`, 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                snippet: { title: '豚ライブストリーム' },
-                cdn: { frameRate: '30fps', ingestionType: 'rtmp', resolution: '720p' },
-            }),
-        });
-        if (!streamRes.ok) {
-            const err = await streamRes.json();
-            throw new Error(err.error?.message || `HTTP ${streamRes.status}`);
-        }
-        const stream = await streamRes.json();
-        state.ytStreamId = stream.id;
-        const rtmpUrl = stream.cdn?.ingestionInfo?.ingestionAddress || '';
-        const streamKey = stream.cdn?.ingestionInfo?.streamName || '';
-        log(`ストリーム作成完了`, 'info');
-
-        // 3. バインド
-        await fetch(`${YOUTUBE_API_BASE}/liveBroadcasts/bind?id=${state.ytBroadcastId}&part=id,contentDetails&streamId=${state.ytStreamId}`, {
+        // 3. 永続ストリームにバインド
+        await fetch(`${YOUTUBE_API_BASE}/liveBroadcasts/bind?id=${state.ytBroadcastId}&part=id,contentDetails&streamId=${streamId}`, {
             method: 'POST',
             headers: { Authorization: `Bearer ${state.ytAccessToken}`, 'Content-Type': 'application/json' },
             body: '{}',
         });
-        log('ストリームをバインドしました', 'info');
+        log('✅ ストリームをバインドしました', 'info');
 
-        // 4. RTMP情報をクリップボードにコピー
-        const rtmpInfo = `RTMP URL: ${rtmpUrl}\nストリームキー: ${streamKey}`;
-        try {
-            await navigator.clipboard.writeText(rtmpInfo);
-            notify('RTMP設定をコピーしました。Larixに貼り付けてください', 'success');
-        } catch (e) {
-            prompt('LarixのRTMP設定に入力してください:', rtmpInfo);
-        }
-
+        // 4. Larixを起動（永続キーが設定済みなのでプロンプト不要）
         state.isStreaming = true;
         if (dom.ytStreamStatus) dom.ytStreamStatus.textContent = 'Larix起動中...';
         if (dom.btnYtStartStream) dom.btnYtStartStream.style.display = 'none';
         if (dom.btnStopStream) dom.btnStopStream.style.display = '';
 
         log('Larix Broadcasterを起動します...', 'info');
-        setTimeout(() => { window.location.href = 'larix://'; }, 1000);
+        notify('配信開始！Larixを起動します', 'success');
+        setTimeout(() => {
+            const iframe = document.createElement('iframe');
+            iframe.style.cssText = 'display:none;width:0;height:0;border:none;';
+            iframe.src = 'larix://';
+            document.body.appendChild(iframe);
+            setTimeout(() => { try { document.body.removeChild(iframe); } catch (e) {} }, 500);
+        }, 500);
 
     } catch (err) {
         log(`❌ YouTube配信開始エラー: ${err.message}`, 'error');
