@@ -657,8 +657,19 @@ function openLarix() {
     log('※ Larixで「自動接続」が有効になっていれば配信が自動開始されます', 'info');
     state.isStreaming = true;
     updateStreamBadge();
-    // Larixを起動（インストール済みの場合はアプリが開く）
-    window.location.href = 'larix://';
+    // iframeトリックでポップアップなし起動を試みる
+    // 失敗した場合は通常のlocation遷移にフォールバック
+    try {
+        const iframe = document.createElement('iframe');
+        iframe.style.cssText = 'display:none;width:0;height:0;border:none;';
+        iframe.src = 'larix://';
+        document.body.appendChild(iframe);
+        setTimeout(() => {
+            try { document.body.removeChild(iframe); } catch (e) {}
+        }, 500);
+    } catch (e) {
+        window.location.href = 'larix://';
+    }
 }
 
 function copyLarixSettings() {
