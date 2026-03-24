@@ -335,6 +335,9 @@ async function startMonitoring() {
 
     try {
         log('BLEスキャン権限をリクエスト中...', 'info');
+        log(`[診断] requestLEScan: ${typeof navigator.bluetooth.requestLEScan}`, 'info');
+        log(`[診断] getDevices: ${typeof navigator.bluetooth.getDevices}`, 'info');
+        log(`[診断] watchAdvertisements: ${typeof navigator.bluetooth.watchAdvertisements}`, 'info');
 
         // 優先順位:
         // 1. getDevices() で保存済みデバイスを自動取得（ピッカー不要）
@@ -345,6 +348,7 @@ async function startMonitoring() {
         } else if (navigator.bluetooth.requestLEScan) {
             await startBLEScan();
         } else {
+            log('[診断] requestLEScanが存在しない → requestDeviceにフォールバック', 'warning');
             await startPeriodicScan();
         }
 
@@ -360,29 +364,25 @@ async function startMonitoring() {
 
 async function startBLEScan() {
     try {
-        log('（許可画面が出ない場合はURLバー左の🔒マークから権限を確認してください）', 'info');
-        
-        // 10秒でタイムアウトさせる（Chromeが黙ってハングするバグへの対策）
-        const timeoutPromise = new Promise((_, reject) => 
-            setTimeout(() => reject(new Error('許可ダイアログが開かずにタイムアウトしました')), 10000)
+        log('requestLEScanを呼び出します...', 'info');
+
+        const timeoutPromise = new Promise((_, reject) =>
+            setTimeout(() => reject(new Error('タイムアウト')), 10000)
         );
-        
+
         const scanOptions = { acceptAllAdvertisements: true };
         const scanPromise = navigator.bluetooth.requestLEScan(scanOptions);
-        
+
         state.bleScan = await Promise.race([scanPromise, timeoutPromise]);
-
         navigator.bluetooth.addEventListener('advertisementreceived', handleAdvertisement);
-
-        log(`BLE広告スキャンを開始しました（active:${state.bleScan?.active}）`, 'success');
+        log(`✅ requestLEScan成功（active:${state.bleScan?.active}）ピッカーなしで監視中`, 'success');
     } catch (err) {
-        log(`スキャン開始エラー: ${err.message}`, 'error');
-        if (err.message.includes('タイムアウト')) {
-            log('💡 ヒント: Android Chromeの設定で「Experimental Web Platform features」がEnabledになっているか、スマホ本体の位置情報がONになっているか再確認してください。', 'warning');
-        } else {
-            // その他のエラーの場合は定期スキャン（requestDevice）を試す
-            await startPeriodicScan();
+        log(`[診断] requestLEScanエラー: ${err.name} - ${err.message}`, 'error');
+        if (err.message === 'タイムアウト') {
+            log('💡 位置情報がONか確認してください', 'warning');
         }
+        log('requestDeviceにフォールバックします', 'warning');
+        await startPeriodicScan();
     }
 }
 
