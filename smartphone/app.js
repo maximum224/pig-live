@@ -294,6 +294,29 @@ async function testWebhook() {
 
 // ===== BLE スキャン =====
 
+async function tryGetSavedDevice() {
+    try {
+        if (!navigator.bluetooth.getDevices) return false;
+        const devices = await navigator.bluetooth.getDevices();
+        if (devices.length === 0) return false;
+
+        // 名前が設定されていれば名前で探す、なければ最初のデバイス
+        const beaconName = state.settings.beaconName?.trim();
+        const device = beaconName
+            ? (devices.find(d => d.name === beaconName) || devices[0])
+            : devices[0];
+
+        state.bleDevice = device;
+        device.addEventListener('advertisementreceived', handleAdvertisement);
+        await device.watchAdvertisements();
+        log(`✅ 保存済みデバイス「${device.name || '(名前なし)'}」で監視開始（ピッカーなし）`, 'success');
+        return true;
+    } catch (e) {
+        log(`getDevices失敗: ${e.message}`, 'warning');
+        return false;
+    }
+}
+
 async function toggleMonitor() {
     if (state.monitoring) {
         stopMonitoring();
@@ -313,12 +336,15 @@ async function startMonitoring() {
     try {
         log('BLEスキャン権限をリクエスト中...', 'info');
 
-        // Web Bluetooth API requestLEScan を試行
-        // フォールバック: requestDevice で手動接続
-        if (navigator.bluetooth.requestLEScan) {
+        // 優先順位:
+        // 1. getDevices() で保存済みデバイスを自動取得（ピッカー不要）
+        // 2. requestLEScan（ピッカー不要・フラグ必要）
+        // 3. requestDevice（ピッカーあり・フォールバック）
+        if (await tryGetSavedDevice()) {
+            // 保存済みデバイスで監視開始
+        } else if (navigator.bluetooth.requestLEScan) {
             await startBLEScan();
         } else {
-            // requestLEScan 非対応の場合は定期スキャンで代替
             await startPeriodicScan();
         }
 
