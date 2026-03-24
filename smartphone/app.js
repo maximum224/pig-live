@@ -28,6 +28,7 @@ const state = {
         rtmpUrl: 'rtmp://rtmp.whowatch.tv/live',
         streamingPlatform: 'fuwatchi', // 'fuwatchi' or 'youtube'
         googleClientId: '',
+        beaconName: '',
     },
     // 監視状態
     monitoring: false,
@@ -80,7 +81,7 @@ function cacheDom() {
         'inputUuid', 'inputMajor', 'inputMinor', 'inputThreshold',
         'thresholdRangeValue', 'inputDetectionCount', 'inputScanInterval',
         'inputStreamKey', 'inputRtmpUrl', 'btnCopyLarixSettings',
-        'inputGoogleClientId',
+        'inputGoogleClientId', 'inputBeaconName',
         'logContainer', 'btnClearLog', 'notification',
         'notifIcon', 'notifText',
         'btnAndroid', 'btnIos', 'pushcutCard', 'pushcutBadge',
@@ -197,6 +198,7 @@ function gatherSettingsFromForm() {
     state.settings.streamKey = dom.inputStreamKey.value.trim();
     state.settings.rtmpUrl = dom.inputRtmpUrl.value.trim();
     if (dom.inputGoogleClientId) state.settings.googleClientId = dom.inputGoogleClientId.value.trim();
+    if (dom.inputBeaconName) state.settings.beaconName = dom.inputBeaconName.value.trim();
     updateStreamBadge();
 }
 
@@ -212,6 +214,7 @@ function applySettingsToForm() {
     dom.inputStreamKey.value = state.settings.streamKey;
     dom.inputRtmpUrl.value = state.settings.rtmpUrl;
     if (dom.inputGoogleClientId) dom.inputGoogleClientId.value = state.settings.googleClientId;
+    if (dom.inputBeaconName) dom.inputBeaconName.value = state.settings.beaconName;
     updateThresholdLine();
     updateStreamBadge();
 }
@@ -360,16 +363,24 @@ async function startBLEScan() {
 async function startPeriodicScan() {
     log('デバイスリストからビーコンを選択してください（iBeaconのみ表示）...', 'info');
 
-    // iBeacon（Apple製造元データ 0x004C）のみ表示するフィルター
-    // acceptAllDevices にフォールバックも用意
+    // 名前 → iBeaconフィルター → 全デバイス の順でフォールバック
     let device;
+    const beaconName = state.settings.beaconName?.trim();
     try {
-        device = await navigator.bluetooth.requestDevice({
-            filters: [{ manufacturerData: [{ companyIdentifier: 0x004C }] }],
-        });
+        if (beaconName) {
+            // 設定に名前があれば名前で絞り込む（最も確実）
+            log(`デバイス名「${beaconName}」で検索中...`, 'info');
+            device = await navigator.bluetooth.requestDevice({
+                filters: [{ name: beaconName }],
+            });
+        } else {
+            // iBeacon（Apple 0x004C）のみ表示
+            device = await navigator.bluetooth.requestDevice({
+                filters: [{ manufacturerData: [{ companyIdentifier: 0x004C }] }],
+            });
+        }
     } catch (filterErr) {
-        // フィルターが効かない場合は全デバイス表示
-        log('iBeaconフィルター未対応のため全デバイスを表示します', 'warning');
+        log('フィルター未対応のため全デバイスを表示します', 'warning');
         device = await navigator.bluetooth.requestDevice({ acceptAllDevices: true });
     }
 
