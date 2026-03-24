@@ -45,6 +45,7 @@ const state = {
     bleSupported: false,
     bleDevice: null,
     bleScan: null,
+    bleWatching: false, // watchAdvertisements が起動中かどうか
     // プラットフォーム
     platform: 'android', // 'android' or 'ios'
     // YouTube
@@ -334,21 +335,14 @@ async function startMonitoring() {
     gatherSettingsFromForm();
 
     try {
-        log('BLEスキャン権限をリクエスト中...', 'info');
-        log(`[診断] requestLEScan: ${typeof navigator.bluetooth.requestLEScan}`, 'info');
-        log(`[診断] getDevices: ${typeof navigator.bluetooth.getDevices}`, 'info');
-        log(`[診断] watchAdvertisements: ${typeof navigator.bluetooth.watchAdvertisements}`, 'info');
-
-        // 優先順位:
-        // 1. getDevices() で保存済みデバイスを自動取得（ピッカー不要）
-        // 2. requestLEScan（ピッカー不要・フラグ必要）
-        // 3. requestDevice（ピッカーあり・フォールバック）
-        if (await tryGetSavedDevice()) {
-            // 保存済みデバイスで監視開始
+        // Bluefy対応: watchAdvertisementsが既に動いていれば再利用（ピッカーなし・再起動不要）
+        if (state.bleWatching && state.bleDevice) {
+            log('✅ BLE監視を再開しました（ピッカーなし）', 'success');
+        } else if (await tryGetSavedDevice()) {
+            // getDevices()で保存済みデバイスを取得
         } else if (navigator.bluetooth.requestLEScan) {
             await startBLEScan();
         } else {
-            log('[診断] requestLEScanが存在しない → requestDeviceにフォールバック', 'warning');
             await startPeriodicScan();
         }
 
@@ -364,24 +358,18 @@ async function startMonitoring() {
 
 async function startBLEScan() {
     try {
-        log('requestLEScanを呼び出します...', 'info');
-
         const timeoutPromise = new Promise((_, reject) =>
             setTimeout(() => reject(new Error('タイムアウト')), 10000)
         );
-
-        const scanOptions = { acceptAllAdvertisements: true };
-        const scanPromise = navigator.bluetooth.requestLEScan(scanOptions);
-
-        state.bleScan = await Promise.race([scanPromise, timeoutPromise]);
+        state.bleScan = await Promise.race([
+            navigator.bluetooth.requestLEScan({ acceptAllAdvertisements: true }),
+            timeoutPromise,
+        ]);
         navigator.bluetooth.addEventListener('advertisementreceived', handleAdvertisement);
-        log(`✅ requestLEScan成功（active:${state.bleScan?.active}）ピッカーなしで監視中`, 'success');
+        state.bleWatching = true;
+        log('✅ スキャン開始（ピッカーなし）', 'success');
     } catch (err) {
-        log(`[診断] requestLEScanエラー: ${err.name} - ${err.message}`, 'error');
-        if (err.message === 'タイムアウト') {
-            log('💡 位置情報がONか確認してください', 'warning');
-        }
-        log('requestDeviceにフォールバックします', 'warning');
+        log(`スキャンエラー: ${err.message}`, 'warning');
         await startPeriodicScan();
     }
 }
@@ -420,7 +408,8 @@ async function startPeriodicScan() {
 
     device.addEventListener('advertisementreceived', handleAdvertisement);
     await device.watchAdvertisements();
-    log('広告監視を開始しました（watchAdvertisementsモード）', 'success');
+    state.bleWatching = true;
+    log('✅ 広告監視を開始しました', 'success');
 }
 
 function scheduleScan() {
@@ -462,6 +451,7 @@ async function performSingleScan() {
 }
 
 function handleAdvertisement(event) {
+    if (!state.monitoring) return; // 監視停止中は無視
     const rssi = event.rssi;
     log(`📻 広告受信: ${event.device.name || '名前なし'} RSSI:${rssi}`, 'info');
 
@@ -565,6 +555,8 @@ function handleNoDetection() {
 }
 
 function onPigDetected() {
+    state.detectionCount = 0; // 連続検知スパム防止
+
     log('🎉 豚が餌場に接近しました！', 'success');
     notify('🐷 豚が餌場に接近しました！', 'success');
     updateStatusUI('detected');
@@ -587,22 +579,24 @@ function stopMonitoring() {
         state.scanTimer = null;
     }
 
-    // BLE scan stop
-    try {
-        if (state.bleScan) {
-            state.bleScan.stop();
-            state.bleScan = null;
-        }
-        if (state.bleDevice) {
-            try { state.bleDevice.unwatchAdvertisements?.(); } catch (e) {}
-            state.bleDevice.removeEventListener('advertisementreceived', handleAdvertisement);
-            state.bleDevice = null;
-        }
-        navigator.bluetooth?.removeEventListener?.('advertisementreceived', handleAdvertisement);
-    } catch (e) { /* ignore */ }
+    // iOSのBluefy向け: watchAdvertisementsは停止しない
+    // （停止すると再開時にイベントが来なくなるBlufyのバグ回避）
+    // state.bleDeviceとstate.bleWatchingは維持して再開時に再利用
+    if (state.platform !== 'ios') {
+        try {
+            if (state.bleScan) { state.bleScan.stop(); state.bleScan = null; }
+            if (state.bleDevice) {
+                try { state.bleDevice.unwatchAdvertisements?.(); } catch (e) {}
+                state.bleDevice.removeEventListener('advertisementreceived', handleAdvertisement);
+                state.bleDevice = null;
+            }
+            navigator.bluetooth?.removeEventListener?.('advertisementreceived', handleAdvertisement);
+            state.bleWatching = false;
+        } catch (e) { /* ignore */ }
+    }
 
     updateUI();
-    log('監視を停止しました', 'info');
+    log('監視を停止しました（BLE接続は維持中）', 'info');
 }
 
 // ===== RSSI表示 =====
